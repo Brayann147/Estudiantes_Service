@@ -1,0 +1,59 @@
+# Módulo Estudiantes - infraestructura local.
+#
+#   docker compose up -d                      -> solo PostgreSQL (uso normal en desarrollo:
+#                                                la API corre en tu máquina con "npm run dev")
+#   docker compose --profile full up -d --build -> PostgreSQL + API dentro de Docker
+#
+# Las variables se leen del archivo .env (copia de .env.example).
+name: estudiantes-service
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: estudiantes-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:?Define DB_USER en el archivo .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Define DB_PASSWORD en el archivo .env}
+      POSTGRES_DB: ${DB_NAME:-estudiantes_db}
+    ports:
+      - '${DB_PORT:-5433}:5432'
+    volumes:
+      - estudiantes_pgdata:/var/lib/postgresql/data # persistencia: los datos sobreviven a "docker compose down"
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - estudiantes-net
+
+  api:
+    profiles: ['full']
+    build: .
+    container_name: estudiantes-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy # espera a que PostgreSQL esté listo
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_HOST: db # nombre del servicio dentro de la red de Docker
+      DB_PORT: 5432 # puerto interno (no el publicado en tu máquina)
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-estudiantes_db}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    ports:
+      - '${PORT:-3001}:3001'
+    command: ['sh', '-c', 'node src/database/migrate.js && node src/server.js']
+    networks:
+      - estudiantes-net
+
+volumes:
+  estudiantes_pgdata:
+
+networks:
+  estudiantes-net:
