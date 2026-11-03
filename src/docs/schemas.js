@@ -62,6 +62,14 @@ const studentExample = {
   status: 'active',
   programId: 1,
   email: 'laura.gomez@example.com',
+  foto: {
+    originalName: 'laura.png',
+    contentType: 'image/png',
+    sizeBytes: 184320,
+    uploadedAt: '2026-11-02T15:04:05.000Z',
+  },
+  fotoUrl:
+    'https://estudiantes-fotos.s3.us-east-1.amazonaws.com/estudiantes/12/3f2c9a1e.png?X-Amz-Expires=600&X-Amz-Signature=...',
   createdAt: '2026-09-19T15:04:05.000Z',
   updatedAt: '2026-09-19T15:04:05.000Z',
 };
@@ -179,9 +187,45 @@ const schemas = {
         example: 'laura.gomez@example.com',
         description: 'Correo del contacto principal (null si aún no tiene contacto)',
       },
+      foto: { allOf: [ref('PhotoMetadata')], nullable: true },
+      fotoUrl: {
+        type: 'string',
+        format: 'uri',
+        nullable: true,
+        description:
+          'URL temporal firmada para ver la foto (el bucket es privado). Vence en PHOTO_URL_TTL_SECONDS; null si no tiene foto.',
+      },
       ...timestamps,
     },
     example: studentExample,
+  },
+  PhotoMetadata: {
+    type: 'object',
+    description:
+      'Metadatos guardados en la base de datos. El archivo vive en el almacenamiento de objetos, nunca en la base.',
+    required: ['originalName', 'contentType', 'sizeBytes', 'uploadedAt'],
+    properties: {
+      originalName: { type: 'string', example: 'laura.png' },
+      contentType: { type: 'string', enum: ['image/jpeg', 'image/png'], example: 'image/png' },
+      sizeBytes: { type: 'integer', maximum: 2097152, example: 184320 },
+      uploadedAt: { type: 'string', format: 'date-time', example: '2026-11-02T15:04:05.000Z' },
+    },
+  },
+  PhotoUpload: {
+    type: 'object',
+    required: ['file'],
+    properties: {
+      file: { type: 'string', format: 'binary', description: 'Imagen JPG o PNG, máximo 2 MB' },
+    },
+  },
+  PhotoUrl: {
+    type: 'object',
+    required: ['url', 'expiresIn'],
+    properties: {
+      url: { type: 'string', format: 'uri' },
+      expiresIn: { type: 'integer', description: 'Segundos de validez de la URL', example: 600 },
+    },
+    example: { url: studentExample.fotoUrl, expiresIn: 600 },
   },
   StudentGatewayContract: {
     type: 'object',

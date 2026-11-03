@@ -6,6 +6,9 @@ const COLUMNS = `s.id, s.first_name AS "firstName", s.last_name AS "lastName",
   s.document_type AS "documentType", s.document_number AS "documentNumber",
   s.birth_date AS "birthDate", s.gender, s.status, s.program_id AS "programId",
   p.name AS "programName", c.email,
+  s.photo_key AS "photoKey", s.photo_original_name AS "photoOriginalName",
+  s.photo_content_type AS "photoContentType", s.photo_size_bytes AS "photoSizeBytes",
+  s.photo_uploaded_at AS "photoUploadedAt",
   s.created_at AS "createdAt", s.updated_at AS "updatedAt"`;
 
 const FROM = `FROM students s
@@ -108,10 +111,60 @@ async function update(id, changes, db = pool) {
   return result.rowCount > 0;
 }
 
-/** Elimina al estudiante; contactos y documentos se eliminan en cascada (ON DELETE CASCADE). */
+/**
+ * Elimina al estudiante; contactos y documentos se eliminan en cascada (ON DELETE CASCADE).
+ * Devuelve { deleted, photoKey } para que el servicio borre también el objeto en S3.
+ */
 async function remove(id, db = pool) {
-  const result = await db.query('DELETE FROM students WHERE id = $1', [id]);
-  return result.rowCount > 0;
+  const { rows } = await db.query(
+    'DELETE FROM students WHERE id = $1 RETURNING photo_key AS "photoKey"',
+    [id],
+  );
+  return { deleted: rows.length > 0, photoKey: rows[0]?.photoKey ?? null };
 }
 
-module.exports = { SORT_COLUMNS, findAll, findById, existsById, create, update, remove };
+/**
+ * Guarda los metadatos de la nueva foto y devuelve la clave de la anterior (o null),
+ * en una sola sentencia: no hay ventana entre leer la clave vieja y escribir la nueva.
+ * Devuelve undefined si el estudiante no existe.
+ */
+async function setPhoto(id, { key, originalName, contentType, sizeBytes }, db = pool) {
+  const { rows } = await db.query(
+    `WITH old AS (SELECT id, photo_key FROM students WHERE id = $1 FOR UPDATE)
+     UPDATE students s
+        SET photo_key = $2, photo_original_name = $3, photo_content_type = $4,
+            photo_size_bytes = $5, photo_uploaded_at = now()
+       FROM old
+      WHERE s.id = old.id
+     RETURNING old.photo_key AS "oldKey"`,
+    [id, key, originalName, contentType, sizeBytes],
+  );
+  return rows.length === 0 ? undefined : rows[0].oldKey;
+}
+
+/** Borra los metadatos de la foto y devuelve la clave que tenía (null si no tenía; undefined si no existe). */
+async function clearPhoto(id, db = pool) {
+  const { rows } = await db.query(
+    `WITH old AS (SELECT id, photo_key FROM students WHERE id = $1 FOR UPDATE)
+     UPDATE students s
+        SET photo_key = NULL, photo_original_name = NULL, photo_content_type = NULL,
+            photo_size_bytes = NULL, photo_uploaded_at = NULL
+       FROM old
+      WHERE s.id = old.id
+     RETURNING old.photo_key AS "oldKey"`,
+    [id],
+  );
+  return rows.length === 0 ? undefined : rows[0].oldKey;
+}
+
+module.exports = {
+  SORT_COLUMNS,
+  findAll,
+  findById,
+  existsById,
+  create,
+  update,
+  remove,
+  setPhoto,
+  clearPhoto,
+};

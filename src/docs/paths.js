@@ -350,11 +350,89 @@ const paths = {
     delete: {
       tags: ['Estudiantes'],
       summary: 'Eliminar un estudiante',
-      description: 'Elimina también su contacto y sus documentos (ON DELETE CASCADE).',
+      description:
+        'Elimina también su contacto y sus documentos (ON DELETE CASCADE) y su fotografía del almacenamiento.',
       responses: {
         204: { description: 'Eliminado (sin contenido)' },
         400: E.invalidId(),
         404: E.studentNotFound,
+        ...common,
+      },
+    },
+  },
+  '/api/estudiantes/{id}/foto': {
+    parameters: [param('StudentIdPath')],
+    put: {
+      tags: ['Estudiantes'],
+      summary: 'Subir o reemplazar la fotografía',
+      description:
+        'multipart/form-data con el campo `file`. Solo JPG o PNG (se verifica el contenido real, no la extensión), máximo 2 MB. ' +
+        'El archivo se guarda en el bucket privado; la base guarda solo sus metadatos. Si ya tenía foto, la anterior se elimina.',
+      requestBody: {
+        required: true,
+        content: { 'multipart/form-data': { schema: ref('PhotoUpload') } },
+      },
+      responses: {
+        200: success(
+          'Fotografía guardada; el estudiante incluye `foto` y `fotoUrl`',
+          'Student',
+          studentExample,
+        ),
+        400: E.invalidId(),
+        404: E.studentNotFound,
+        413: failure(
+          'Archivo mayor a 2 MB',
+          'PHOTO_TOO_LARGE',
+          'La fotografía supera el tamaño máximo de 2 MB',
+          [{ field: 'file', message: 'Máximo 2 MB' }],
+        ),
+        415: failure(
+          'No es JPG ni PNG',
+          'UNSUPPORTED_PHOTO_TYPE',
+          'Solo se aceptan imágenes JPG o PNG',
+          [{ field: 'file', message: 'Debe ser JPG o PNG' }],
+        ),
+        422: failure(
+          'No se envió el archivo',
+          'PHOTO_REQUIRED',
+          'Debe enviar la fotografía en el campo "file" (multipart/form-data)',
+          [{ field: 'file', message: 'Es obligatorio' }],
+        ),
+        500: E.internal,
+        503: failure(
+          'PostgreSQL o el almacenamiento no disponible',
+          'STORAGE_UNAVAILABLE',
+          'No fue posible acceder al almacenamiento de archivos',
+        ),
+      },
+    },
+    get: {
+      tags: ['Estudiantes'],
+      summary: 'Obtener una URL temporal de la fotografía',
+      description:
+        'El bucket es privado: el objeto solo se puede leer con esta URL firmada, que vence en `expiresIn` segundos.',
+      responses: {
+        200: success('URL firmada', 'PhotoUrl', { url: studentExample.fotoUrl, expiresIn: 600 }),
+        400: E.invalidId(),
+        404: failure(
+          'El estudiante no existe o no tiene foto',
+          'PHOTO_NOT_FOUND',
+          'El estudiante no tiene una fotografía registrada',
+        ),
+        ...common,
+      },
+    },
+    delete: {
+      tags: ['Estudiantes'],
+      summary: 'Eliminar la fotografía',
+      responses: {
+        204: { description: 'Eliminada (sin contenido)' },
+        400: E.invalidId(),
+        404: failure(
+          'El estudiante no existe o no tiene foto',
+          'PHOTO_NOT_FOUND',
+          'El estudiante no tiene una fotografía registrada',
+        ),
         ...common,
       },
     },

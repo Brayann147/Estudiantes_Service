@@ -1,10 +1,12 @@
 # Módulo Estudiantes - infraestructura local.
 #
-#   docker compose up -d                      -> solo PostgreSQL (uso normal en desarrollo:
-#                                                la API corre en tu máquina con "npm run dev")
-#   docker compose --profile full up -d --build -> PostgreSQL + API dentro de Docker
+#   docker compose up -d                      -> PostgreSQL + RustFS (S3 local) para las fotos
+#                                                (la API corre en tu máquina con "npm run dev")
+#   docker compose --profile full up -d --build -> lo anterior + la API dentro de Docker
 #
 # Las variables se leen del archivo .env (copia de .env.example).
+# En la nube RustFS se reemplaza por Amazon S3 (mismo protocolo): basta quitar S3_ENDPOINT.
+# (Se usa RustFS porque MinIO dejó de publicar imágenes de Docker.)
 name: estudiantes-service
 
 services:
@@ -29,6 +31,45 @@ services:
     networks:
       - estudiantes-net
 
+  # Almacenamiento de objetos compatible con S3, solo para desarrollo local.
+  storage:
+    image: rustfs/rustfs
+    container_name: estudiantes-storage
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:?Define AWS_ACCESS_KEY_ID en el archivo .env}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:?Define AWS_SECRET_ACCESS_KEY en el archivo .env}
+      RUSTFS_CONSOLE_ENABLE: 'true'
+    ports:
+      - '${STORAGE_PORT:-9000}:9000' # API S3
+      - '${STORAGE_CONSOLE_PORT:-9001}:9001' # consola web
+    volumes:
+      - estudiantes_storage:/data
+    networks:
+      - estudiantes-net
+
+  # Crea el bucket si no existe y termina. Un bucket nuevo es privado: sin firma no se lee nada.
+  storage-init:
+    image: amazon/aws-cli
+    container_name: estudiantes-storage-init
+    depends_on:
+      - storage
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+      BUCKET: ${S3_BUCKET:-estudiantes-fotos}
+    entrypoint: >
+      sh -c "S3='aws --endpoint-url http://storage:9000 s3api';
+             for i in $$(seq 1 30); do
+               $$S3 head-bucket --bucket $$BUCKET >/dev/null 2>&1 && echo 'Bucket listo' && exit 0;
+               $$S3 create-bucket --bucket $$BUCKET >/dev/null 2>&1 && echo 'Bucket creado' && exit 0;
+               sleep 2;
+             done; echo 'No se pudo crear el bucket'; exit 1"
+    restart: 'no'
+    networks:
+      - estudiantes-net
+
   api:
     profiles: ['full']
     build: .
@@ -37,6 +78,8 @@ services:
     depends_on:
       db:
         condition: service_healthy # espera a que PostgreSQL esté listo
+      storage-init:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3001
@@ -46,6 +89,13 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-estudiantes_db}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      S3_BUCKET: ${S3_BUCKET:-estudiantes-fotos}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT: http://storage:9000 # dentro de la red de Docker
+      S3_PUBLIC_ENDPOINT: http://localhost:${STORAGE_PORT:-9000} # la URL firmada la abre el navegador
+      S3_FORCE_PATH_STYLE: 'true'
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     ports:
       - '${PORT:-3001}:3001'
     command: ['sh', '-c', 'node src/database/migrate.js && node src/server.js']
@@ -54,6 +104,7 @@ services:
 
 volumes:
   estudiantes_pgdata:
+  estudiantes_storage:
 
 networks:
   estudiantes-net:

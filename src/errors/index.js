@@ -14,6 +14,31 @@ const Errors = {
   payloadTooLarge: () =>
     new AppError(413, 'PAYLOAD_TOO_LARGE', 'El cuerpo de la petición supera el tamaño permitido'),
 
+  // Fotografía del estudiante
+  photoRequired: () =>
+    new AppError(
+      422,
+      'PHOTO_REQUIRED',
+      'Debe enviar la fotografía en el campo "file" (multipart/form-data)',
+      [{ field: 'file', message: 'Es obligatorio' }],
+    ),
+  photoTooLarge: () =>
+    new AppError(413, 'PHOTO_TOO_LARGE', 'La fotografía supera el tamaño máximo de 2 MB', [
+      { field: 'file', message: 'Máximo 2 MB' },
+    ]),
+  unsupportedPhotoType: () =>
+    new AppError(415, 'UNSUPPORTED_PHOTO_TYPE', 'Solo se aceptan imágenes JPG o PNG', [
+      { field: 'file', message: 'Debe ser JPG o PNG' },
+    ]),
+  photoNotFound: () =>
+    new AppError(404, 'PHOTO_NOT_FOUND', 'El estudiante no tiene una fotografía registrada'),
+  storageUnavailable: () =>
+    new AppError(
+      503,
+      'STORAGE_UNAVAILABLE',
+      'No fue posible acceder al almacenamiento de archivos',
+    ),
+
   // 422 - el cuerpo llegó bien formado pero no cumple las reglas
   validation: (details) =>
     new AppError(422, 'VALIDATION_ERROR', 'Los datos enviados no son válidos', details),

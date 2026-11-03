@@ -22,4 +22,17 @@ async function remove(req, res) {
   res.status(204).send();
 }
 
-module.exports = { list, getById, create, update, remove };
+async function uploadPhoto(req, res) {
+  res.json(await studentService.uploadPhoto(req.validated.params.id, req.file));
+}
+
+async function getPhotoUrl(req, res) {
+  res.json(await studentService.getPhotoUrl(req.validated.params.id));
+}
+
+async function deletePhoto(req, res) {
+  await studentService.deletePhoto(req.validated.params.id);
+  res.status(204).send();
+}
+
+module.exports = { list, getById, create, update, remove, uploadPhoto, getPhotoUrl, deletePhoto };

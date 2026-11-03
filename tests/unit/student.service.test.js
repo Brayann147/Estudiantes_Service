@@ -1,8 +1,10 @@
 jest.mock('../../src/repositories/student.repository');
 jest.mock('../../src/repositories/program.repository');
+jest.mock('../../src/storage/photoStorage');
 
 const studentRepository = require('../../src/repositories/student.repository');
 const programRepository = require('../../src/repositories/program.repository');
+const photoStorage = require('../../src/storage/photoStorage');
 const studentService = require('../../src/services/student.service');
 
 const row = {
@@ -100,7 +102,51 @@ describe('student.service', () => {
   });
 
   it('remove lanza STUDENT_NOT_FOUND si no se eliminó ninguna fila', async () => {
-    studentRepository.remove.mockResolvedValue(false);
+    studentRepository.remove.mockResolvedValue({ deleted: false, photoKey: null });
     await expect(studentService.remove(5)).rejects.toMatchObject({ code: 'STUDENT_NOT_FOUND' });
+  });
+
+  it('remove borra también la foto del almacenamiento', async () => {
+    studentRepository.remove.mockResolvedValue({ deleted: true, photoKey: 'estudiantes/5/a.png' });
+    await studentService.remove(5);
+    expect(photoStorage.deletePhoto).toHaveBeenCalledWith('estudiantes/5/a.png');
+  });
+});
+
+describe('student.service - fotografía', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const file = { buffer: png, originalname: 'laura.png' };
+
+  it('si guardar los metadatos falla, borra el objeto recién subido (sin huérfanos en el bucket)', async () => {
+    studentRepository.existsById.mockResolvedValue(true);
+    studentRepository.setPhoto.mockRejectedValue(new Error('BD caída'));
+
+    await expect(studentService.uploadPhoto(12, file)).rejects.toThrow('BD caída');
+
+    const uploadedKey = photoStorage.putPhoto.mock.calls[0][0];
+    expect(uploadedKey).toMatch(/^estudiantes\/12\/[0-9a-f-]+\.png$/);
+    expect(photoStorage.deletePhoto).toHaveBeenCalledWith(uploadedKey);
+  });
+
+  it('al reemplazar, borra el objeto de la foto anterior', async () => {
+    studentRepository.existsById.mockResolvedValue(true);
+    studentRepository.setPhoto.mockResolvedValue('estudiantes/12/vieja.jpg');
+    studentRepository.findById.mockResolvedValue({ ...row, photoKey: 'estudiantes/12/nueva.png' });
+    photoStorage.signedPhotoUrl.mockResolvedValue('https://firmada');
+
+    const result = await studentService.uploadPhoto(12, file);
+
+    expect(photoStorage.deletePhoto).toHaveBeenCalledWith('estudiantes/12/vieja.jpg');
+    expect(result.fotoUrl).toBe('https://firmada');
+  });
+
+  it('si S3 no está disponible responde STORAGE_UNAVAILABLE y no toca la base', async () => {
+    studentRepository.existsById.mockResolvedValue(true);
+    photoStorage.putPhoto.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(studentService.uploadPhoto(12, file)).rejects.toMatchObject({
+      code: 'STORAGE_UNAVAILABLE',
+    });
+    expect(studentRepository.setPhoto).not.toHaveBeenCalled();
   });
 });

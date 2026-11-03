@@ -1,4 +1,6 @@
-# Módulo Estudiantes — Laboratorio 3, Sistemas Distribuidos (UPTC)
+# Módulo Estudiantes — Laboratorios 3 y 4, Sistemas Distribuidos (UPTC)
+
+> **Lab 4:** fotografía del estudiante en almacenamiento de objetos (S3), con URLs firmadas. Ver la [sección 21](#21-laboratorio-4-fotografía-en-almacenamiento-de-objetos).
 
 ## 1. Descripción del módulo
 
@@ -77,11 +79,11 @@ git clone <url-de-tu-repositorio> estudiantes-service
 cd estudiantes-service
 
 cp .env.example .env          # Windows CMD: copy .env.example .env
-# Edita .env y cambia DB_PASSWORD
+# Edita .env y cambia DB_PASSWORD y AWS_SECRET_ACCESS_KEY (clave del S3 local)
 
-docker compose up -d          # levanta PostgreSQL
+docker compose up -d          # levanta PostgreSQL y RustFS (S3 local) y crea el bucket
 npm install
-npm run migrate               # crea las tablas
+npm run migrate               # crea las tablas (incluye los metadatos de la foto)
 npm run seed                  # datos de prueba (7 programas, 25 estudiantes)
 npm run dev                   # API en http://localhost:3001
 ```
@@ -102,6 +104,13 @@ Comprueba: <http://localhost:3001/health> y <http://localhost:3001/api-docs>.
 | `DB_NAME`                 | `estudiantes_db`      | Base de datos independiente del módulo                                  |
 | `DB_NAME_TEST`            | `estudiantes_db_test` | Base usada solo por Jest                                                |
 | `DB_POOL_MAX`             | `10`                  | Conexiones máximas del pool                                             |
+| `S3_BUCKET`               | `estudiantes-fotos`   | Bucket **privado** de las fotografías                                   |
+| `S3_REGION`               | `us-east-1`           | Región del bucket                                                       |
+| `S3_ENDPOINT`             | `http://localhost:9000` | Solo local (RustFS). En AWS se omite                                  |
+| `S3_PUBLIC_ENDPOINT`      | —                     | Solo si el endpoint interno no lo alcanza el navegador (Docker)         |
+| `S3_FORCE_PATH_STYLE`     | `true`                | `true` en local; en AWS se omite                                        |
+| `PHOTO_URL_TTL_SECONDS`   | `600`                 | Validez de las URLs firmadas (60 a 86400 s)                             |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | — | **Solo local** (S3 de RustFS). En AWS no se definen: el SDK usa el rol de la tarea |
 
 `.env` está en `.gitignore`; solo se versiona `.env.example` (con valores de ejemplo, sin secretos reales). Si falta una variable obligatoria, la app termina con un mensaje claro.
 
@@ -199,6 +208,8 @@ npm run test:coverage    # con cobertura
 | PUT                               | `/api/estudiantes/:id`                   | Reemplazar (todos los campos)                |
 | PATCH                             | `/api/estudiantes/:id`                   | Actualizar parcialmente                      |
 | DELETE                            | `/api/estudiantes/:id`                   | Eliminar (cascada a contacto y documentos)   |
+| PUT                               | `/api/estudiantes/:id/foto`              | Subir o reemplazar la foto (multipart)       |
+| GET · DELETE                      | `/api/estudiantes/:id/foto`              | URL temporal firmada · eliminar la foto      |
 | GET · POST                        | `/api/programas`                         | Listar (paginado) · crear                    |
 | GET · PUT · PATCH · DELETE        | `/api/programas/:id`                     | Consultar · reemplazar · parcial · eliminar  |
 | GET · POST · PUT · PATCH · DELETE | `/api/estudiantes/:studentId/contacto`   | Contacto principal (1:1)                     |
@@ -384,3 +395,52 @@ GET /api/estudiantes/12/detalle
 - Documento del estudiante (`students.document_*`) y `documents` son independientes: crear un estudiante no crea automáticamente su documento principal.
 - El ejecutor de migraciones solo avanza (no hay _rollback_/`down`); en desarrollo se usa `migrate:reset`.
 - Las credenciales de la BD viajan por variables de entorno; en un despliegue real conviene un gestor de secretos.
+- `fotoUrl` vence a los `PHOTO_URL_TTL_SECONDS`: un cliente que guarde la URL debe volver a pedir el estudiante (o `GET /:id/foto`) para obtener una nueva.
+
+## 21. Laboratorio 4: fotografía en almacenamiento de objetos
+
+**Requisito 5.2:** subir y reemplazar la foto (multipart, solo JPG/PNG, máx. 2 MB), guardarla en el
+almacenamiento de objetos (no en la base ni en el disco del contenedor) e incluirla en `/detalle`.
+
+```
+PUT /api/estudiantes/12/foto   (multipart/form-data, campo "file")
+  1. multer la recibe EN MEMORIA (máx. 2 MB → 413)       — nunca toca el disco efímero del contenedor
+  2. se verifica el tipo por sus bytes (JPG/PNG → si no, 415) — la extensión y el Content-Type se pueden falsificar
+  3. PutObject en S3 con clave nueva: estudiantes/12/<uuid>.png
+  4. UPDATE de los metadatos en students (clave, nombre, tipo, tamaño, fecha)
+  5. DeleteObject de la foto anterior
+  (si el paso 4 falla, se borra el objeto del paso 3: no quedan archivos huérfanos)
+```
+
+- **La base guarda solo metadatos** (`photo_key`, `photo_original_name`, `photo_content_type`,
+  `photo_size_bytes`, `photo_uploaded_at`), con `CHECK` que repiten las reglas de tipo y tamaño.
+  Migración `005_add_student_photo.sql`.
+- **El bucket es privado.** `fotoUrl` es una **URL firmada** (SigV4, `X-Amz-Expires`) que se genera en
+  cada lectura y vence en `PHOTO_URL_TTL_SECONDS`. Sin firma, S3 responde `403 AccessDenied`.
+- **`/detalle` incluye la foto sin cambios en el Gateway**: el Gateway pasa `estudiante` tal cual y
+  `GET /api/estudiantes/{id}` ya trae `foto` y `fotoUrl`. El listado también la trae (pantalla de estudiantes del frontend).
+- Eliminar al estudiante elimina también su objeto en el bucket.
+
+### Local: RustFS en lugar de S3
+
+`docker compose up -d` levanta **RustFS** (compatible con el API de S3; MinIO dejó de publicar imágenes)
+y un contenedor `amazon/aws-cli` que crea el bucket. Consola web: <http://localhost:9001> (usuario y clave =
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` del `.env`).
+
+```bash
+# subir (también funciona a través del Gateway en :8080 con un token de ADMIN)
+curl -X PUT -F "file=@laura.png" http://localhost:3001/api/estudiantes/12/foto
+# URL temporal
+curl http://localhost:3001/api/estudiantes/12/foto
+```
+
+### En AWS (despliegue)
+
+- Bucket S3 **privado** (Block Public Access activado), en la misma región que el servicio.
+- Variables: `S3_BUCKET`, `S3_REGION`, `PHOTO_URL_TTL_SECONDS`. **No** se definen `S3_ENDPOINT`,
+  `S3_FORCE_PATH_STYLE` ni claves `AWS_*`: el SDK toma credenciales temporales del **rol de la tarea**
+  (ECS), así que no hay claves de acceso en el repositorio, en la imagen ni en las variables.
+- Permisos mínimos que necesita el módulo, solo sobre su bucket:
+  `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` en `arn:aws:s3:::<bucket>/estudiantes/*`.
+  Si la cuenta no permite crear roles propios (cuentas educativas con un rol preasignado), se usa el rol
+  provisto y se documenta esa decisión.

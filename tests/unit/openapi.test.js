@@ -28,6 +28,10 @@ const REQUIRED = [
   'PUT /api/documentos/{id}',
   'PATCH /api/documentos/{id}',
   'DELETE /api/documentos/{id}',
+  // Lab 4: fotografía del estudiante
+  'PUT /api/estudiantes/{id}/foto',
+  'GET /api/estudiantes/{id}/foto',
+  'DELETE /api/estudiantes/{id}/foto',
 ];
 
 describe('Swagger / OpenAPI', () => {
